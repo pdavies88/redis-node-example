@@ -23,30 +23,42 @@ app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/photos", async (req, res) => {
   const albumId = req.query.albumId;
-  redisClient.get("photos", async (error, photos) => {
-    if (error) console.error(error);
-    if (photos != null) {
-      console.log("Cache");
-      return res.json(JSON.parse(photos));
-    } else {
-      console.log("No Cache");
-      const { data } = await axios.get(
-        "https://jsonplaceholder.typicode.com/photos",
-        { params: { albumId } }
-      );
-      redisClient.setex("photos", DEFAULT_EXPIRATION, JSON.stringify(data));
-      res.json(data);
-    }
+  const photos = await getOrSetCache(`photos?albumId=${albumId}`, async () => {
+    const { data } = await axios.get(
+      "https://jsonplaceholder.typicode.com/photos",
+      { params: { albumId } }
+    );
+    return data;
   });
+  res.json(photos);
 });
 
 app.get("/photos/:id", async (req, res) => {
-  const { data } = await axios.get(
-    `https://jsonplaceholder.typicode.com/photos/${req.params.id}`
-  );
-
-  res.json(data);
+  const photo = await getOrSetCache(`photos:${req.params.id}`, async () => {
+    const { data } = await axios.get(
+      `https://jsonplaceholder.typicode.com/photos/${req.params.id}`
+    );
+    return data;
+  });
+  res.json(photo);
 });
+
+function getOrSetCache(key, cb) {
+  return new Promise((resolve, reject) => {
+    redisClient.get(key, async (error, data) => {
+      if (error) return reject(error);
+      if (data != null) {
+        console.log("Data from cache");
+        return resolve(JSON.parse(data));
+      } else {
+        console.log("Not in cache");
+        const freshData = await cb();
+        redisClient.setex(key, DEFAULT_EXPIRATION, JSON.stringify(freshData));
+        resolve(freshData);
+      }
+    });
+  });
+}
 
 const listener = app.listen(8080, function () {
   console.log("Listening on port " + listener.address().port);
